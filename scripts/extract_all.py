@@ -12,11 +12,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Make ``src/`` importable when running this file directly.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from face_finder.utils import extract_zip
 
-from face_finder.utils import extract_zip  # noqa: E402
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 DATA_DIR = PROJECT_ROOT / "data"
 OUTPUT_DIR = PROJECT_ROOT / "output"
