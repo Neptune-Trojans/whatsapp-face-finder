@@ -1,0 +1,11 @@
+# Data: input exports, reference images, and matched output (may contain private photos)
+data/
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# OS / IDE
+.DS_Store
+.idea/
