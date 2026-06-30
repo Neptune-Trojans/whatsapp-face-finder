@@ -58,13 +58,17 @@ def build_reference_embedding(reference_faces: Sequence) -> np.ndarray:
     return mean / norm
 
 
+def scores(reference_embedding: np.ndarray, faces: Sequence) -> list[float]:
+    """Cosine similarity between the reference and each face, in face order."""
+    return [
+        cosine_similarity(reference_embedding, f.normed_embedding) for f in faces
+    ]
+
+
 def best_score(reference_embedding: np.ndarray, faces: Sequence) -> float:
     """Best cosine similarity between the reference and any face in an image.
 
     Returns 0.0 when the image contains no faces.
     """
-    if not faces:
-        return 0.0
-    return max(
-        cosine_similarity(reference_embedding, f.normed_embedding) for f in faces
-    )
+    face_scores = scores(reference_embedding, faces)
+    return max(face_scores) if face_scores else 0.0

@@ -35,6 +35,19 @@ class Match:
     output: Path        # where the copy was written under out_dir
 
 
+@dataclass(frozen=True)
+class Detection:
+    """One detected face on a scanned image (or a face-less image).
+
+    ``box`` and ``similarity`` are ``None`` for images where no face was
+    detected, so every scanned image appears in the manifest.
+    """
+
+    source: Path                                          # image path under media_dir
+    box: tuple[float, float, float, float] | None         # (x_min, y_min, x_max, y_max)
+    similarity: float | None                              # cosine similarity for this face
+
+
 @dataclass
 class PipelineResult:
     """Outcome of a pipeline run."""
@@ -83,11 +96,11 @@ def find_person(
     reference_embedding, reference_faces = _build_reference(reference_dir, analyzer)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    matches, scanned, skipped = _scan(
+    matches, detections, scanned, skipped = _scan(
         media_dir, out_dir, analyzer, reference_embedding, threshold, progress
     )
 
-    manifest = _write_manifest(out_dir, media_dir, matches)
+    manifest = _write_manifest(out_dir, media_dir, detections)
 
     log.info(
         "scanned %d image(s), skipped %d, found %d match(es) >= %.2f -> %s",
@@ -145,16 +158,23 @@ def _scan(
     reference_embedding: np.ndarray,
     threshold: float,
     progress: bool,
-) -> tuple[list[Match], int, int]:
-    """Scan every image under ``media_dir`` and copy out the matches."""
+) -> tuple[list[Match], list[Detection], int, int]:
+    """Scan every image under ``media_dir``, recording per-face detections.
+
+    Returns matches (best face >= threshold, copied out), detections (one row
+    per detected face, or one face-less row per image with no faces), and the
+    scanned / skipped counts.
+    """
     matches: list[Match] = []
+    detections: list[Detection] = []
     scanned = 0
     skipped = 0
 
     out_dir_resolved = out_dir.resolve()
 
+    images = list(iter_images(media_dir))
     for path in tqdm(
-        iter_images(media_dir), desc="Scanning", unit="img", disable=not progress
+        images, total=len(images), desc="Scanning", unit="img", disable=not progress
     ):
         # Don't re-scan our own output if out_dir lives inside media_dir.
         if out_dir_resolved in path.resolve().parents:
@@ -166,19 +186,35 @@ def _scan(
             continue
 
         scanned += 1
-        score = matcher.best_score(reference_embedding, faces)
-        if score >= threshold:
+
+        if not faces:
+            detections.append(Detection(source=path, box=None, similarity=None))
+            continue
+
+        face_scores = matcher.scores(reference_embedding, faces)
+        for face, score in zip(faces, face_scores):
+            x_min, y_min, x_max, y_max = (float(v) for v in face.bbox)
+            detections.append(
+                Detection(
+                    source=path,
+                    box=(x_min, y_min, x_max, y_max),
+                    similarity=score,
+                )
+            )
+
+        best = max(face_scores)
+        if best >= threshold:
             output = _copy_match(path, out_dir)
             matches.append(
                 Match(
                     source=path,
-                    similarity=score,
+                    similarity=best,
                     num_faces=len(faces),
                     output=output,
                 )
             )
 
-    return matches, scanned, skipped
+    return matches, detections, scanned, skipped
 
 
 def _copy_match(source: Path, out_dir: Path) -> Path:
@@ -194,21 +230,43 @@ def _copy_match(source: Path, out_dir: Path) -> Path:
     return target
 
 
-def _write_manifest(out_dir: Path, media_dir: Path, matches: list[Match]) -> Path:
-    """Write matches.csv (best matches first); always written, even if empty."""
+def _write_manifest(
+    out_dir: Path, media_dir: Path, detections: list[Detection]
+) -> Path:
+    """Write the per-face manifest CSV.
+
+    One row per detected face (every scanned image included; face-less images
+    get a single row with blank box/similarity columns). Rows are in scan
+    order, so faces of the same image stay grouped. Always written, even if
+    empty.
+    """
     manifest = out_dir / MANIFEST_NAME
-    rows = sorted(matches, key=lambda m: m.similarity, reverse=True)
 
     with manifest.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["similarity", "num_faces", "source_path", "output_file"])
-        for m in rows:
+        writer.writerow(
+            ["source_path", "x_min", "x_max", "y_min", "y_max", "similarity"]
+        )
+        for d in detections:
             try:
-                source_path = m.source.relative_to(media_dir)
+                source_path = d.source.relative_to(media_dir)
             except ValueError:
-                source_path = m.source
+                source_path = d.source
+
+            if d.box is None:
+                writer.writerow([str(source_path), "", "", "", "", ""])
+                continue
+
+            x_min, y_min, x_max, y_max = d.box
             writer.writerow(
-                [f"{m.similarity:.4f}", m.num_faces, str(source_path), m.output.name]
+                [
+                    str(source_path),
+                    f"{x_min:.1f}",
+                    f"{x_max:.1f}",
+                    f"{y_min:.1f}",
+                    f"{y_max:.1f}",
+                    f"{d.similarity:.4f}",
+                ]
             )
 
     return manifest
