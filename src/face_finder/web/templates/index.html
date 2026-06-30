@@ -39,7 +39,21 @@
     #dirList { flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
     .entry { padding: 0.5rem 0.7rem; cursor: pointer; border-bottom: 1px solid #f0f0f3; font-size: 0.88rem; }
     .entry:hover { background: #eff3ff; }
+    .file-entry { display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0.7rem;
+             border-bottom: 1px solid #f0f0f3; font-size: 0.88rem; cursor: pointer; }
+    .file-entry:hover { background: #eff3ff; }
+    .file-entry input { margin: 0; }
     .modal-actions { display: flex; justify-content: space-between; margin-top: 1rem; }
+    /* reference thumbnails */
+    .muted { color: var(--muted); font-size: 0.85rem; align-self: center; }
+    .thumbs { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; }
+    .thumb { position: relative; width: 72px; height: 72px; border-radius: 8px;
+             overflow: hidden; border: 1px solid var(--border); background: #f0f0f3; }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .thumb-rm { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; padding: 0;
+             line-height: 16px; text-align: center; border-radius: 50%; border: none;
+             background: rgba(0,0,0,0.6); color: #fff; font-size: 0.7rem; cursor: pointer; }
+    .thumb-rm:hover { background: rgba(0,0,0,0.8); }
   </style>
 </head>
 <body>
@@ -59,11 +73,12 @@
       <button onclick="openBrowser('output')">Browse…</button>
     </div>
 
-    <label>Reference folder (photos of the target person)</label>
+    <label>Reference images (photos of the target person)</label>
     <div class="row">
-      <input type="text" id="reference" value="{{ default_reference }}">
-      <button onclick="openBrowser('reference')">Browse…</button>
+      <button onclick="openFilePicker()">Add images…</button>
+      <span id="refCount" class="muted"></span>
     </div>
+    <div id="refThumbs" class="thumbs"></div>
 
     <label>Match threshold</label>
     <input type="text" id="threshold" value="{{ default_threshold }}" inputmode="decimal">
@@ -82,54 +97,108 @@
   <!-- Folder browser modal -->
   <div id="modal">
     <div class="inner">
-      <strong>Select a folder</strong>
+      <strong id="modalTitle">Select a folder</strong>
       <div id="curPath"></div>
       <div id="dirList"></div>
       <div class="modal-actions">
         <button onclick="closeBrowser()">Cancel</button>
-        <button class="primary" onclick="useFolder()">Use this folder</button>
+        <button class="primary" id="modalConfirm" onclick="confirmModal()">Use this folder</button>
       </div>
     </div>
   </div>
 
   <script>
-    let targetField = null;   // which input the browser is filling
-    let currentPath = null;   // path shown in the browser
+    let mode = "folder";        // "folder" (media/output) | "files" (reference)
+    let targetField = null;     // which input the folder browser is filling
+    let currentPath = null;     // path shown in the browser
+    let lastRefDir = "{{ default_reference_dir }}";  // remember where we picked references
+    let references = [];        // selected reference image paths
+    let picked = null;          // working Set of paths while the file picker is open
     let pollTimer = null;
 
+    function joinPath(dir, name) { return dir.replace(/\/$/, "") + "/" + name; }
+
     async function openBrowser(field) {
+      mode = "folder";
       targetField = field;
+      document.getElementById("modalTitle").textContent = "Select a folder";
+      document.getElementById("modalConfirm").textContent = "Use this folder";
       await navigate(document.getElementById(field).value || "");
+      document.getElementById("modal").style.display = "flex";
+    }
+    async function openFilePicker() {
+      mode = "files";
+      picked = new Set(references);
+      document.getElementById("modalTitle").textContent = "Select reference images";
+      document.getElementById("modalConfirm").textContent = "Add selected";
+      await navigate(lastRefDir);
       document.getElementById("modal").style.display = "flex";
     }
     function closeBrowser() { document.getElementById("modal").style.display = "none"; }
 
     async function navigate(path) {
-      const res = await fetch("/api/browse?path=" + encodeURIComponent(path));
+      const url = "/api/browse?path=" + encodeURIComponent(path) + (mode === "files" ? "&files=1" : "");
+      const res = await fetch(url);
       const data = await res.json();
       currentPath = data.path;
+      if (mode === "files") lastRefDir = data.path;
       document.getElementById("curPath").textContent = data.path;
       const list = document.getElementById("dirList");
       list.innerHTML = "";
-      if (data.parent) addEntry(list, "📁 ..", data.parent);
-      for (const d of data.dirs) addEntry(list, "📁 " + d, data.path.replace(/\/$/, "") + "/" + d);
+      if (data.parent) addDirEntry(list, "📁 ..", data.parent);
+      for (const d of data.dirs) addDirEntry(list, "📁 " + d, joinPath(data.path, d));
+      if (mode === "files") for (const f of data.files) addFileEntry(list, f, joinPath(data.path, f));
     }
-    function addEntry(list, label, path) {
+    function addDirEntry(list, label, path) {
       const el = document.createElement("div");
       el.className = "entry"; el.textContent = label;
       el.onclick = () => navigate(path);
       list.appendChild(el);
     }
-    function useFolder() {
-      document.getElementById(targetField).value = currentPath;
+    function addFileEntry(list, name, path) {
+      const row = document.createElement("label");
+      row.className = "file-entry";
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.checked = picked.has(path);
+      cb.onchange = () => { cb.checked ? picked.add(path) : picked.delete(path); };
+      row.appendChild(cb);
+      row.appendChild(document.createTextNode("🖼️ " + name));
+      list.appendChild(row);
+    }
+    function confirmModal() {
+      if (mode === "files") {
+        references = Array.from(picked);
+        renderThumbs();
+      } else {
+        document.getElementById(targetField).value = currentPath;
+      }
       closeBrowser();
+    }
+
+    function renderThumbs() {
+      const wrap = document.getElementById("refThumbs");
+      wrap.innerHTML = "";
+      document.getElementById("refCount").textContent =
+        references.length ? `${references.length} image(s) selected` : "No images selected";
+      for (const p of references) {
+        const cell = document.createElement("div");
+        cell.className = "thumb";
+        const img = document.createElement("img");
+        img.src = "/api/thumb?path=" + encodeURIComponent(p);
+        img.title = p; img.loading = "lazy";
+        const rm = document.createElement("button");
+        rm.className = "thumb-rm"; rm.textContent = "✕"; rm.title = "Remove";
+        rm.onclick = () => { references = references.filter(x => x !== p); renderThumbs(); };
+        cell.appendChild(img); cell.appendChild(rm);
+        wrap.appendChild(cell);
+      }
     }
 
     async function run() {
       const body = {
         media: document.getElementById("media").value,
         output: document.getElementById("output").value,
-        reference: document.getElementById("reference").value,
+        references: references,
         threshold: document.getElementById("threshold").value,
       };
       const res = await fetch("/api/run", {
@@ -169,6 +238,8 @@
         document.getElementById("runBtn").disabled = false;
       }
     }
+
+    renderThumbs();  // show the initial "No images selected" hint
   </script>
 </body>
 </html>

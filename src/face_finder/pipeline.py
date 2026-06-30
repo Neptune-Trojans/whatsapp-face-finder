@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import csv
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,7 +60,7 @@ class PipelineResult:
 
 
 def find_person(
-    reference_dir: Path,
+    reference: Path | Sequence[Path],
     media_dir: Path,
     out_dir: Path,
     threshold: float = DEFAULT_THRESHOLD,
@@ -72,7 +72,9 @@ def find_person(
     """Find images of the reference person within ``media_dir``.
 
     Args:
-        reference_dir: Folder of reference image(s) of the target person.
+        reference: Reference image(s) of the target person. Either a folder
+            (all images within are used, recursively), a single image file, or
+            an explicit sequence of image files.
         media_dir: Folder of images to scan (searched recursively).
         out_dir: Folder to copy matching images into; the manifest CSV is
             written here too. Created if it does not exist.
@@ -90,14 +92,14 @@ def find_person(
     Raises:
         ValueError: if no reference images or no reference faces are found.
     """
-    reference_dir = Path(reference_dir)
     media_dir = Path(media_dir)
     out_dir = Path(out_dir)
 
     if analyzer is None:
         analyzer = FaceAnalyzer()
 
-    reference_embedding, reference_faces = _build_reference(reference_dir, analyzer)
+    reference_images = _reference_images(reference)
+    reference_embedding, reference_faces = _build_reference(reference_images, analyzer)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     matches, detections, scanned, skipped = _scan(
@@ -124,13 +126,26 @@ def find_person(
     )
 
 
+def _reference_images(reference: Path | Sequence[Path]) -> list[Path]:
+    """Resolve the reference selection to a list of image paths.
+
+    Accepts a directory (all images within are used, recursively), a single
+    image file, or an explicit sequence of image files.
+    """
+    if isinstance(reference, (str, Path)):
+        path = Path(reference)
+        if path.is_dir():
+            return list(iter_images(path))
+        return [path]
+    return [Path(p) for p in reference]
+
+
 def _build_reference(
-    reference_dir: Path, analyzer: FaceAnalyzer
+    reference_images: list[Path], analyzer: FaceAnalyzer
 ) -> tuple[np.ndarray, int]:
     """Build a single reference embedding from the reference images."""
-    reference_images = list(iter_images(reference_dir))
     if not reference_images:
-        raise ValueError(f"No reference images found in {reference_dir}")
+        raise ValueError("No reference images provided.")
 
     representative_faces = []
     for path in reference_images:
@@ -147,9 +162,7 @@ def _build_reference(
         representative_faces.append(matcher._best_face(faces))
 
     if not representative_faces:
-        raise ValueError(
-            f"No faces detected in any reference image under {reference_dir}"
-        )
+        raise ValueError("No faces detected in any of the reference images.")
 
     embedding = matcher.build_reference_embedding(representative_faces)
     log.info("Built reference embedding from %d face(s)", len(representative_faces))

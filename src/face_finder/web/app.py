@@ -9,13 +9,16 @@ with no auth and a single job at a time.
 from __future__ import annotations
 
 import threading
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, abort, jsonify, render_template, request
 
-from ..config import DATA_DIR, DEFAULT_THRESHOLD, OUTPUT_DIR, PROJECT_ROOT
+from ..config import DATA_DIR, DEFAULT_THRESHOLD, IMAGE_EXTS, OUTPUT_DIR, PROJECT_ROOT
 from ..pipeline import find_person
+from ..utils import make_thumbnail
+
+THUMB_MAX = 160  # longest-side pixels for reference thumbnails
 
 
 @dataclass
@@ -47,11 +50,13 @@ class JobManager:
         with self._lock:
             return self._state.state == "running"
 
-    def start(self, media: Path, output: Path, reference: Path, threshold: float) -> None:
+    def start(
+        self, media: Path, output: Path, references: list[Path], threshold: float
+    ) -> None:
         with self._lock:
             self._state = JobState(state="running", phase="Loading model / preparing reference…")
         self._thread = threading.Thread(
-            target=self._run, args=(media, output, reference, threshold), daemon=True
+            target=self._run, args=(media, output, references, threshold), daemon=True
         )
         self._thread.start()
 
@@ -60,13 +65,15 @@ class JobManager:
             for key, value in kwargs.items():
                 setattr(self._state, key, value)
 
-    def _run(self, media: Path, output: Path, reference: Path, threshold: float) -> None:
+    def _run(
+        self, media: Path, output: Path, references: list[Path], threshold: float
+    ) -> None:
         def on_progress(done: int, total: int, matches: int) -> None:
             self._set(phase="Scanning…", done=done, total=total, matches=matches)
 
         try:
             result = find_person(
-                reference, media, output, threshold,
+                references, media, output, threshold,
                 progress=False, on_progress=on_progress,
             )
             self._set(
@@ -102,7 +109,7 @@ def create_app() -> Flask:
             "index.html",
             default_media=str(DATA_DIR),
             default_output=str(OUTPUT_DIR),
-            default_reference=str(DATA_DIR / "reference"),
+            default_reference_dir=str(DATA_DIR / "reference"),
             default_threshold=DEFAULT_THRESHOLD,
         )
 
@@ -113,15 +120,32 @@ def create_app() -> Flask:
             p.name for p in current.iterdir()
             if p.is_dir() and not p.name.startswith(".")
         )
+        files: list[str] = []
+        if request.args.get("files"):  # only the reference picker asks for files
+            files = sorted(
+                p.name for p in current.iterdir()
+                if p.is_file() and p.suffix.lower() in IMAGE_EXTS
+            )
         parent = None if current.parent == current else str(current.parent)
-        return jsonify(path=str(current), parent=parent, dirs=dirs)
+        return jsonify(path=str(current), parent=parent, dirs=dirs, files=files)
+
+    @app.get("/api/thumb")
+    def thumb():
+        path = Path(str(request.args.get("path", ""))).expanduser()
+        if not path.is_file() or path.suffix.lower() not in IMAGE_EXTS:
+            abort(404)
+        try:
+            jpeg = make_thumbnail(path, THUMB_MAX)
+        except ValueError:
+            abort(415)
+        return Response(jpeg, mimetype="image/jpeg")
 
     @app.post("/api/run")
     def run():
         data = request.get_json(silent=True) or {}
         media = Path(str(data.get("media", ""))).expanduser()
         output = Path(str(data.get("output", ""))).expanduser()
-        reference = Path(str(data.get("reference", ""))).expanduser()
+        references = [Path(str(r)).expanduser() for r in data.get("references", [])]
 
         try:
             threshold = float(data.get("threshold", DEFAULT_THRESHOLD))
@@ -130,12 +154,15 @@ def create_app() -> Flask:
 
         if not media.is_dir():
             return jsonify(error=f"Media folder not found: {media}"), 400
-        if not reference.is_dir():
-            return jsonify(error=f"Reference folder not found: {reference}"), 400
+        if not references:
+            return jsonify(error="Select at least one reference image."), 400
+        missing = [str(r) for r in references if not r.is_file()]
+        if missing:
+            return jsonify(error=f"Reference image not found: {missing[0]}"), 400
         if jobs.is_running():
             return jsonify(error="A run is already in progress."), 409
 
-        jobs.start(media, output, reference, threshold)
+        jobs.start(media, output, references, threshold)
         return jsonify(started=True)
 
     @app.get("/api/status")
