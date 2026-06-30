@@ -81,3 +81,9 @@ Python · [InsightFace](https://github.com/deepinsight/insightface) (`buffalo_l`
 ## Privacy
 
 This tool runs entirely on your computer. Face detection, recognition, and file copying happen locally — no images, embeddings, or data are sent over the network. Only use it on photos you have the right to process.
+
+## License
+
+This project's source code is released under the [MIT License](LICENSE).
+
+**Note:** the face-recognition models downloaded at runtime (InsightFace `buffalo_l`) are provided by [InsightFace](https://github.com/deepinsight/insightface) for **non-commercial / research use only**. The MIT license covers this repository's code, not those pretrained models — review InsightFace's terms before any commercial use.
