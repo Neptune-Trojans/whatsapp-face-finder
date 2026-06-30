@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "whatsapp-person-image-extractor"
+name = "whatsapp-face-finder"
 version = "0.1.0"
 description = "Find images of a specific person inside large WhatsApp group chat exports."
 readme = "README.md"

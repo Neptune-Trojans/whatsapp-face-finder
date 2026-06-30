@@ -27,8 +27,8 @@ Useful when you need to pull one person's pictures out of a group chat with thou
 Requires **Python 3.10+**.
 
 ```bash
-git clone https://github.com/Neptune-Trojans/whatsapp-person-image-extractor.git
-cd whatsapp-person-image-extractor
+git clone https://github.com/Neptune-Trojans/whatsapp-face-finder.git
+cd whatsapp-face-finder
 
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
