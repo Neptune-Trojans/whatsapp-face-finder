@@ -1,6 +1,9 @@
-# Data: input exports, reference images, and matched output (may contain private photos)
-data/
-output/
+# Data: input exports, reference images, and matched output (may contain private photos).
+# Keep the folders in the repo, but ignore their contents.
+data/*
+!data/.gitkeep
+output/*
+!output/.gitkeep
 
 # Python
 __pycache__/
